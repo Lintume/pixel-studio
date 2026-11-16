@@ -24,8 +24,7 @@ class AdminReportController extends Controller
 {
     public function __invoke(Request $request, PixelforgeClient $pixelforge): Response
     {
-        abort_unless($request->user()->isAdmin(), 403);
-
+        // Access is decided by OperatorReportAccess.
         $to = Carbon::now('UTC')->startOfDay();
         $from = $to->copy()->subDays(29);
 
@@ -85,6 +84,10 @@ class AdminReportController extends Controller
             ],
             'reconciliation' => $days,
             'usageError' => $usageError,
+            // Opened through a shared link rather than an operator account.
+            'sharedUntil' => $request->user() === null
+                ? Carbon::createFromTimestamp((int) $request->query('expires'), 'UTC')->toDateString()
+                : null,
         ]);
     }
 }

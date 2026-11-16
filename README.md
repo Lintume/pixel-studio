@@ -88,6 +88,15 @@ by one image.
 the day Pixelforge bills it. It reads `GET /v1/usage` for the same days and marks
 each day as matching or not, to the nanodollar.
 
+## Reviewing the operator report
+
+No shared password. `php artisan report:share-link --until=2026-12-16` prints a
+link signed with the app key: it opens the operator report and nothing else,
+read-only, without an account, until the end of that day (UTC). Editing the
+link breaks its signature; rotating `APP_KEY` revokes every link at once. The
+signature covers path and query, not host, so the same link works on any of
+the app's domains. Operators listed in `ADMIN_EMAILS` see the report signed in.
+
 ## Not done, on purpose
 
 - Images aren't copied to our own storage, so they stop loading after Pixelforge's

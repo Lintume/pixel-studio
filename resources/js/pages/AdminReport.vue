@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import AppLayout from '@/layouts/AppLayout.vue';
+import SharedLinkLayout from '@/layouts/SharedLinkLayout.vue';
 import { exactUsd, formatUsd } from '@/lib/money';
 import { Head } from '@inertiajs/vue3';
 import { CheckCircle2, XCircle } from 'lucide-vue-next';
+import { computed } from 'vue';
 
 interface Row {
     date: string;
@@ -20,20 +22,28 @@ interface Day {
     matches: boolean;
 }
 
-defineProps<{
+const props = defineProps<{
     from: string;
     to: string;
     rows: Row[];
     totals: { chargedNanos: number; providerCostNanos: number };
     reconciliation: Day[];
     usageError: string | null;
+    /** Set when opened through a shared link instead of an operator account. */
+    sharedUntil: string | null;
 }>();
+
+const layout = computed(() =>
+    props.sharedUntil
+        ? { component: SharedLinkLayout, props: { until: props.sharedUntil } }
+        : { component: AppLayout, props: { breadcrumbs: [{ title: 'Operator report', href: '/admin/report' }] } },
+);
 </script>
 
 <template>
     <Head title="Operator report" />
 
-    <AppLayout :breadcrumbs="[{ title: 'Operator report', href: '/admin/report' }]">
+    <component :is="layout.component" v-bind="layout.props">
         <div class="mx-auto flex w-full max-w-5xl flex-col gap-8 p-4 md:p-6">
             <header>
                 <h1 class="text-xl font-semibold">Operator report</h1>
@@ -128,5 +138,5 @@ defineProps<{
                 </div>
             </section>
         </div>
-    </AppLayout>
+    </component>
 </template>
