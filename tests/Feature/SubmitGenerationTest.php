@@ -30,17 +30,38 @@ class SubmitGenerationTest extends TestCase
         $this->assertSame('gen_'.$generation->id, $generation->provider_id);
     }
 
-    public function test_overload_and_rate_limits_are_retried_after_retry_after(): void
+    public function test_an_overload_is_retried_after_retry_after(): void
+    {
+        $generation = $this->pendingGeneration($this->userWithCredits());
+        $this->fakeOverload();
+
+        $this->runJob($generation->id)->assertReleased(2);
+
+        $this->assertSame(GenerationStatus::Pending, $generation->refresh()->status);
+    }
+
+    public function test_after_a_few_overloads_it_gives_up_and_gives_the_credits_back(): void
+    {
+        $user = $this->userWithCredits(10);
+        $generation = $this->pendingGeneration($user);
+        $this->fakeOverload();
+
+        $this->runJob($generation->id, attempt: SubmitGeneration::MAX_FAULT_ATTEMPTS)->assertNotReleased();
+
+        $generation->refresh();
+        $this->assertSame(GenerationStatus::Failed, $generation->status);
+        $this->assertSame('overloaded', $generation->error_code);
+        $this->assertSame(10_000_000_000, $user->balanceNanos());
+    }
+
+    public function test_waiting_for_a_concurrency_slot_is_not_a_fault_and_keeps_waiting(): void
     {
         $generation = $this->pendingGeneration($this->userWithCredits());
         Http::fake(['pixelforge.test/v1/generations' => Http::response(
-            ['error' => ['type' => 'api_error', 'code' => 'overloaded', 'message' => 'Busy.']], 503, ['Retry-After' => '2'],
+            ['error' => ['type' => 'rate_limit_error', 'code' => 'concurrency_limit_exceeded', 'message' => 'Busy.']], 429, ['Retry-After' => '5'],
         )]);
 
-        $job = $this->runJob($generation->id);
-
-        $job->assertReleased(2);
-        $this->assertSame(GenerationStatus::Pending, $generation->refresh()->status);
+        $this->runJob($generation->id, attempt: 40)->assertReleased(5);
     }
 
     public function test_a_network_failure_is_retried_too(): void
@@ -67,7 +88,7 @@ class SubmitGenerationTest extends TestCase
         $this->assertSame(10_000_000_000, $user->balanceNanos());
     }
 
-    public function test_giving_up_releases_the_hold_but_a_late_success_is_still_charged(): void
+    public function test_a_late_success_overrules_our_give_up_and_is_charged(): void
     {
         $user = $this->userWithCredits(10);
         $generation = $this->pendingGeneration($user);
@@ -85,11 +106,19 @@ class SubmitGenerationTest extends TestCase
         $this->assertSame(10_000_000_000 - 381_887_500, $user->balanceNanos());
     }
 
-    private function runJob(string $generationId): SubmitGeneration
+    private function runJob(string $generationId, int $attempt = 1): SubmitGeneration
     {
         $job = (new SubmitGeneration($generationId))->withFakeQueueInteractions();
+        $job->job->attempts = $attempt;
         app()->call([$job, 'handle']);
 
         return $job;
+    }
+
+    private function fakeOverload(): void
+    {
+        Http::fake(['pixelforge.test/v1/generations' => Http::response(
+            ['error' => ['type' => 'api_error', 'code' => 'overloaded', 'message' => 'Busy.']], 503, ['Retry-After' => '2'],
+        )]);
     }
 }

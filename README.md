@@ -26,11 +26,12 @@ key's webhook URL at `https://<host>/webhooks/pixelforge`.
    `pending` and the **maximum** possible price is held from the balance, under a
    row lock on the user so two tabs can't both spend the same credits.
 2. **Send** (`SubmitGeneration` job). `POST /v1/generations` with the row's own
-   `Idempotency-Key` and `metadata.generation_id`. 429/503/network errors are
-   retried after `Retry-After` (or exponential backoff), for up to 30 minutes;
-   since the key never changes, a retry can't create a second image. A blocked
-   prompt, a validation error or the daily quota fail it at once and release the
-   hold.
+   `Idempotency-Key` and `metadata.generation_id`; since the key never changes,
+   a retry can't create a second image. Pixelforge's three-at-once limit is a
+   queue, so that wait lasts up to 30 minutes. Overloads, rate limits and
+   network errors are faults: five tries after `Retry-After` (or exponential
+   backoff), then the user is told. A blocked prompt, a validation error or the
+   daily quota fail at once. Every failure releases the hold.
 3. **Settle** (`ApplyProviderState`). The POST response, every webhook and the
    poller all go through this one action. It locks the row, only ever moves the
    status forward, and books the charge and the release of the hold in the same
@@ -77,11 +78,11 @@ never move back. A late `processing` after `succeeded` changes nothing.
 processing that hasn't changed for 2 minutes, at most 20 per run to stay inside the
 rate limit.
 
-**Giving up.** If Pixelforge can't be reached for 30 minutes, the generation is
-marked failed and the hold released. If it turns out Pixelforge did take the
-request (a webhook or poll later says so), Pixelforge's word wins and the user is
-charged for the image they got. That is the one path where a balance could dip
-below zero, by one image.
+**Giving up.** A failure we conclude without ever hearing from Pixelforge
+(retries exhausted) is our own guess. If Pixelforge did take the request after
+all (a webhook or poll later says so), its word wins and the user is charged for
+the image they got. That is the one path where a balance could dip below zero,
+by one image.
 
 **The operator report groups by the UTC day an image completed**, because that is
 the day Pixelforge bills it. It reads `GET /v1/usage` for the same days and marks

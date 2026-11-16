@@ -162,8 +162,14 @@ function failureReason(code: string | null): string {
             return "The model couldn't make an image for this prompt.";
         case 'internal_error':
             return 'Pixelforge had an internal error. Trying again usually works.';
+        case 'overloaded':
+            return 'Pixelforge is overloaded right now. Try again in a minute.';
+        case 'rate_limit_exceeded':
+            return 'Too many requests to Pixelforge right now. Try again in a minute.';
+        case 'network_error':
+            return "We couldn't reach Pixelforge. Try again in a minute.";
         case 'not_submitted':
-            return "We couldn't reach Pixelforge.";
+            return 'Pixelforge had no free slot for 30 minutes.';
         default:
             return 'Something went wrong.';
     }

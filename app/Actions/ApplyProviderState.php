@@ -5,7 +5,6 @@ namespace App\Actions;
 use App\Billing\CostCalculator;
 use App\Enums\CreditTransactionType;
 use App\Enums\GenerationStatus;
-use App\Jobs\SubmitGeneration;
 use App\Models\CreditTransaction;
 use App\Models\Generation;
 use Illuminate\Support\Carbon;
@@ -30,6 +29,11 @@ class ApplyProviderState
         return DB::transaction(function () use ($generation, $object) {
             $generation = Generation::query()->whereKey($generation->getKey())->lockForUpdate()->firstOrFail();
             $incoming = GenerationStatus::from($object['status']);
+            // A failure we recorded without ever hearing from Pixelforge (we gave
+            // up submitting) was our own conclusion. If Pixelforge took the
+            // request after all, its word on what happened and what it billed
+            // is the one that counts.
+            $failedWithoutPixelforge = $generation->status === GenerationStatus::Failed && $generation->provider_id === null;
 
             // Facts that never change once known; safe to fill from any event.
             $generation->provider_id ??= $object['id'];
@@ -37,7 +41,7 @@ class ApplyProviderState
             $generation->provider_created_at ??= $this->time($object['created_at'] ?? null);
             $generation->started_at ??= $this->time($object['started_at'] ?? null);
 
-            if (! $this->movesForward($generation, $incoming)) {
+            if (! $failedWithoutPixelforge && $incoming->rank() <= $generation->status->rank()) {
                 $generation->save();
 
                 return $generation;
@@ -46,7 +50,7 @@ class ApplyProviderState
             $generation->status = $incoming;
 
             if ($incoming !== GenerationStatus::Failed) {
-                // Clears a "could not reach Pixelforge" left by a give-up.
+                // Clears the error left by a give-up that Pixelforge overruled.
                 $generation->error_code = null;
                 $generation->error_message = null;
             }
@@ -61,18 +65,6 @@ class ApplyProviderState
 
             return $generation;
         });
-    }
-
-    private function movesForward(Generation $generation, GenerationStatus $incoming): bool
-    {
-        // We gave up submitting (Pixelforge unreachable for the whole retry
-        // window), but if Pixelforge did take the request after all, its word on
-        // what happened and what it billed is the one that counts.
-        if ($generation->status === GenerationStatus::Failed && $generation->error_code === SubmitGeneration::GAVE_UP) {
-            return $incoming !== GenerationStatus::Failed || $generation->provider_id === null;
-        }
-
-        return $incoming->rank() > $generation->status->rank();
     }
 
     /** @param  array<string, mixed>  $object */

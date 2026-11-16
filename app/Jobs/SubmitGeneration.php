@@ -14,8 +14,14 @@ use Illuminate\Foundation\Queue\Queueable;
 use Throwable;
 
 /**
- * POST /v1/generations for one saved generation, retrying until Pixelforge
- * accepts or definitively refuses it.
+ * POST /v1/generations for one saved generation.
+ *
+ * Two kinds of "not now" get different patience. Pixelforge's limit of three
+ * generations at once is a queue, not a fault: wait for a slot for up to 30
+ * minutes. Overloads, rate limits and network errors are faults: retry a few
+ * times (seconds apart), then tell the user, rather than leave a spinner up for
+ * half an hour. Anything else (blocked prompt, validation, daily quota) fails
+ * at once. None of these ever cost the user anything.
  *
  * Every attempt sends the generation's own Idempotency-Key, so a retry after a
  * timeout can never create (or bill) a second image: Pixelforge hands back the
@@ -28,15 +34,15 @@ class SubmitGeneration implements ShouldQueue
     /** error_code of a generation we stopped trying to submit. */
     public const GAVE_UP = 'not_submitted';
 
-    /** Retries are bounded by time, not count: see retryUntil(). */
+    /** Bounded by time instead: see retryUntil(). */
     public int $tries = 0;
+
+    /** Attempts at an overload, rate limit or network error before giving up. */
+    public const MAX_FAULT_ATTEMPTS = 5;
 
     public function __construct(public readonly string $generationId) {}
 
-    /**
-     * Concurrency waits can be long when many images are in flight, so give
-     * Pixelforge 30 minutes before telling the user it didn't work out.
-     */
+    /** How long to wait for a free concurrency slot. */
     public function retryUntil(): DateTimeInterface
     {
         return now()->addMinutes(30);
@@ -59,7 +65,9 @@ class SubmitGeneration implements ShouldQueue
                 'metadata' => ['generation_id' => $generation->id],
             ]), $generation->idempotency_key);
         } catch (PixelforgeException $e) {
-            if ($e->isRetryable()) {
+            $waitForSlot = $e->errorCode === 'concurrency_limit_exceeded';
+
+            if ($waitForSlot || ($e->isRetryable() && $this->attempts() < self::MAX_FAULT_ATTEMPTS)) {
                 $this->release($this->delay($e));
 
                 return;
@@ -74,13 +82,13 @@ class SubmitGeneration implements ShouldQueue
         $apply($generation, $object);
     }
 
-    /** Ran out of time: release the credits. A late event can still settle it. */
+    /** Waited 30 minutes for a slot without getting one: release the credits. */
     public function failed(?Throwable $e): void
     {
         $generation = Generation::query()->find($this->generationId);
 
         if ($generation !== null) {
-            app(RejectGeneration::class)($generation, self::GAVE_UP, 'Pixelforge could not be reached.');
+            app(RejectGeneration::class)($generation, self::GAVE_UP, 'No free generation slot at Pixelforge.');
         }
     }
 
