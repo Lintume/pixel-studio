@@ -1,16 +1,23 @@
 <?php
 
+use App\Http\Controllers\Webhooks\PixelforgeWebhookController;
 use App\Http\Middleware\HandleInertiaRequests;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Middleware\AddLinkHeadersForPreloadedAssets;
+use Illuminate\Support\Facades\Route;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
         web: __DIR__.'/../routes/web.php',
         commands: __DIR__.'/../routes/console.php',
         health: '/up',
+        // Outside the web group: no session, no CSRF token (Pixelforge has none).
+        // The HMAC signature is what authenticates these requests.
+        then: function () {
+            Route::post('webhooks/pixelforge', PixelforgeWebhookController::class)->name('webhooks.pixelforge');
+        },
     )
     ->withMiddleware(function (Middleware $middleware) {
         $middleware->web(append: [
